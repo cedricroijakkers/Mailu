@@ -63,7 +63,14 @@ jobs:
           echo "PHP ${php_version}"
           [ "$(printf '%s\n%s\n' "${MIN_PHP}" "${php_version}" | sort -V | head -n1)" = "${MIN_PHP}" ] \
             || { echo "PHP ${php_version} is older than ${MIN_PHP}"; exit 1; }
-          docker run -d --name wm --add-host front:127.0.0.1 -e SECRET_KEY=ci -p 8080:80 "${img}"
+          # Minimal settings Mailu's config templates need at startup.
+          docker run -d --name wm --add-host front:127.0.0.1 \
+            -e SECRET_KEY=ci \
+            -e HOSTNAMES=mail.example.com \
+            -e MESSAGE_SIZE_LIMIT=50000000 \
+            -e WEBMAIL=roundcube \
+            -e WEB_WEBMAIL=/webmail \
+            -p 8080:80 "${img}"
           status=starting
           for i in $(seq 1 45); do
             status="$(docker inspect -f '{{.State.Health.Status}}' wm)"
