@@ -1,0 +1,97 @@
+name: Build webmail image
+
+# Fork-only workflow. Rebuilds the Mailu webmail (Roundcube) image on a supported
+# Alpine release so it ships PHP >= 8.3.36 (CVE-2026-109618, CVE-2026-109619) and
+# publishes it to ghcr.io. See FORK-NOTES.md.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [fork-ci]
+    paths:
+      - webmails/**
+      - core/base/**
+      - .github/workflows/webmail-image.yml
+  schedule:
+    # Weekly rebuild to pick up Alpine package updates.
+    - cron: "17 4 * * 1"
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: webmail-image
+  cancel-in-progress: false
+
+env:
+  MAILU_VERSION: "2024.06.65"
+  ALPINE: "alpine:3.23"
+  MIN_PHP: "8.3.36"
+  IMAGE: ghcr.io/${{ github.repository_owner }}/mailu-webmail
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compute tags
+        run: |
+          echo "TAG_BASE=${MAILU_VERSION}-alpine3.23" >> "$GITHUB_ENV"
+          echo "TAG_REV=${MAILU_VERSION}-alpine3.23-r${GITHUB_RUN_NUMBER}" >> "$GITHUB_ENV"
+
+      - name: Build base image
+        run: docker build --pull --build-arg DISTRO="${ALPINE}" -t mailu-base:ci core/base
+
+      - name: Build webmail image
+        run: |
+          docker build \
+            --build-context base=docker-image://mailu-base:ci \
+            --build-arg VERSION="${TAG_REV}" \
+            --label org.opencontainers.image.source="https://github.com/${GITHUB_REPOSITORY}" \
+            --label org.opencontainers.image.description="Mailu webmail (Roundcube) rebuilt on Alpine 3.23 for PHP 8.3.36 (CVE-2026-109618, CVE-2026-109619)" \
+            --label org.opencontainers.image.licenses=MIT \
+            -t "${IMAGE}:${TAG_REV}" \
+            webmails
+
+      - name: Smoke test
+        run: |
+          set -euo pipefail
+          img="${IMAGE}:${TAG_REV}"
+          php_version="$(docker run --rm --entrypoint php "${img}" -v 2>/dev/null | sed -n '1s/^PHP \([0-9.]*\).*/\1/p')"
+          echo "PHP ${php_version}"
+          [ "$(printf '%s\n%s\n' "${MIN_PHP}" "${php_version}" | sort -V | head -n1)" = "${MIN_PHP}" ] \
+            || { echo "PHP ${php_version} is older than ${MIN_PHP}"; exit 1; }
+          docker run -d --name wm --add-host front:127.0.0.1 -e SECRET_KEY=ci -p 8080:80 "${img}"
+          status=starting
+          for i in $(seq 1 45); do
+            status="$(docker inspect -f '{{.State.Health.Status}}' wm)"
+            [ "${status}" = healthy ] && break
+            sleep 2
+          done
+          docker logs wm 2>&1 | tail -20
+          [ "${status}" = healthy ]
+          code="$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/program/js/app.js)"
+          echo "app.js -> ${code}"
+          [ "${code}" = 200 ]
+
+      - name: Log in to ghcr.io
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Push
+        run: |
+          docker tag "${IMAGE}:${TAG_REV}" "${IMAGE}:${TAG_BASE}"
+          docker push "${IMAGE}:${TAG_REV}"
+          docker push "${IMAGE}:${TAG_BASE}"
+          digest="$(docker inspect --format='{{index .RepoDigests 0}}' "${IMAGE}:${TAG_REV}")"
+          {
+            echo "### Pushed"
+            echo "- ${IMAGE}:${TAG_REV}"
+            echo "- ${IMAGE}:${TAG_BASE} (moves with every rebuild)"
+            echo "- digest: ${digest}"
+          } >> "${GITHUB_STEP_SUMMARY}"
