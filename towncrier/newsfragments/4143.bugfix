@@ -1,0 +1,1 @@
+Build the webmail image on Alpine 3.23 to pick up the PHP 8.3.36 fixes for CVE-2026-109618 and CVE-2026-109619

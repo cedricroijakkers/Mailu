@@ -18,6 +18,7 @@ RUN set -euxo pipefail \
     php83-pdo_sqlite php83-pdo_mysql php83-pdo_pgsql php83-pdo php83-sodium libsodium php83-tidy \
     php83-pspell php83-opcache php83-session php83-sockets php83-fileinfo php83-xmlreader php83-xmlwriter \
     aspell-uk aspell-ru aspell-fr aspell-de aspell-en \
+  ; ln -sf php83 /usr/bin/php \
   ; rm /etc/nginx/http.d/default.conf \
   ; rm /etc/php83/php-fpm.d/www.conf \
   ; mkdir -m 700 /root/.gnupg/ \
